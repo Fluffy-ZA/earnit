@@ -291,6 +291,7 @@ function renderHistory(today) {
   }
 
   view.innerHTML = `
+    <button class="btn primary wide" onclick="openReviewModal()">&#10024; Weekly Review</button>
     <h2 class="section-title">Last ${rows.length} week${rows.length === 1 ? '' : 's'}</h2>
     <div class="heat-dow-row"><span class="heat-label"></span>${['M','T','W','T','F','S','S'].map(d => `<span class="heat-dow">${d}</span>`).join('')}</div>
     ${rows.join('')}
@@ -303,6 +304,143 @@ function renderHistory(today) {
       <span><span class="mood-bar demo"></span> mood</span>
     </div>
     <p class="small-print">Tap any day to see details or fix a check-in.</p>`;
+}
+
+/* ---------- Weekly review ---------- */
+
+const REVIEW_SYSTEM = `You are the weekly-review coach inside "Earn It", a private habit tracker and recovery companion. The user is working to quit compulsive habits and build daily ones. You receive one week of their logged data.
+
+Write a short weekly review (under 300 words), plain text, short paragraphs, simple hyphen bullets where useful:
+1. Open with one genuine, specific encouragement grounded in the data.
+2. Point out real patterns (links between urges, missed habits, mood, energy, weekdays). Only claim patterns the data actually supports; if there's too little data, say so gently.
+3. If there were slips, be compassionate and practical - a slip is data, not a verdict.
+4. End with one small, concrete suggestion for next week.
+
+Speak directly to the user as "you". No headings, no markdown besides hyphens, no medical or diagnostic claims.`;
+
+function buildReviewData() {
+  const s = L.weeklyStats(STATE.habits, STATE.days, L.todayStr());
+  const lines = [`My logged data for ${s.startDate} to ${s.endDate}:`, ''];
+
+  lines.push('Habits and current streaks:');
+  for (const h of s.habitStats) {
+    if (h.habit.type === 'do') {
+      let l = `- ${h.habit.name} (build daily, goal ${h.habit.milestone} days): streak ${h.streak}d, done ${h.done}/${h.expected} days this week`;
+      if (h.missedDates.length) l += `, missed on ${h.missedDates.join(', ')}`;
+      lines.push(l);
+    } else {
+      lines.push(`- ${h.habit.name} (quit, goal ${h.habit.milestone} days clean): streak ${h.streak}d, ${h.failedDates.length ? 'slipped on ' + h.failedDates.join(', ') : 'clean all week'}`);
+    }
+  }
+
+  lines.push('', `Urges resisted: ${s.urgeTotal}`);
+  for (const u of s.urgeLog) lines.push(`- ${u.date} (${u.habit})${u.note ? `: "${u.note}"` : ''}`);
+
+  if (s.moodLog.length) {
+    lines.push('', `Mood/energy check-ins (avg mood ${s.moodAvg ?? '-'}/5, avg energy ${s.energyAvg ?? '-'}/5):`);
+    for (const m of s.moodLog) {
+      lines.push(`- ${m.date}: mood ${m.score ?? '-'}/5, energy ${m.energy ?? '-'}/5${m.note ? `, note: "${m.note}"` : ''}`);
+    }
+  } else {
+    lines.push('', 'No mood check-ins this week.');
+  }
+
+  const corr = s.correlations.filter(c => c.urgesPerMissedDay !== null && c.urgesPerDoneDay !== null);
+  if (corr.length) {
+    lines.push('', 'Urges vs habit completion:');
+    for (const c of corr) lines.push(`- days "${c.habit}" was missed: ${c.urgesPerMissedDay} urges/day (${c.missedDays} days); days it was done: ${c.urgesPerDoneDay} urges/day (${c.doneDays} days)`);
+  }
+
+  return lines.join('\n');
+}
+
+function openReviewModal() {
+  const s = L.weeklyStats(STATE.habits, STATE.days, L.todayStr());
+  const hasKey = !!STATE.settings.apiKey;
+  const latest = (STATE.reviews || [])[0];
+
+  const chips = `
+    <div class="review-chips">
+      <span class="chip-stat">&#128170; ${s.urgeTotal} urge${s.urgeTotal === 1 ? '' : 's'} resisted</span>
+      ${s.moodAvg ? `<span class="chip-stat">mood ${s.moodAvg}/5</span>` : ''}
+      ${s.energyAvg ? `<span class="chip-stat">energy &#9889;${s.energyAvg}/5</span>` : ''}
+      ${s.habitStats.map(h => `<span class="chip-stat">${esc(h.habit.name)}: ${
+        h.habit.type === 'do'
+          ? `${h.done}/${h.expected}d`
+          : (h.failedDates.length ? `${h.failedDates.length} slip${h.failedDates.length === 1 ? '' : 's'}` : 'clean &#10003;')
+      }</span>`).join('')}
+    </div>`;
+
+  openModal(`
+    <h3>&#10024; Weekly Review</h3>
+    <p class="small-print" style="margin-top:-8px">${s.startDate} &rarr; ${s.endDate}</p>
+    ${chips}
+    <div id="reviewOutput">
+      ${latest ? `<p class="small-print">Last review (${latest.ts.slice(0, 10)}):</p><div class="review-text">${esc(latest.text)}</div>` : ''}
+    </div>
+    <div class="modal-actions">
+      ${hasKey
+        ? `<button class="btn primary" id="reviewGenBtn" onclick="generateReview()">&#10024; Generate review</button>`
+        : `<button class="btn primary" onclick="copyReviewPrompt(this)">&#128203; Copy prompt for Claude</button>`}
+      <button class="btn" onclick="closeModal()">Close</button>
+    </div>
+    ${hasKey
+      ? `<p class="small-print">Sends this week's data to Claude using your API key. <button class="linklike" onclick="copyReviewPrompt(this)">Copy the prompt instead</button></p>`
+      : `<p class="small-print">Paste the copied prompt into the Claude app for your review — or add an API key in Settings for one-tap reviews here.</p>`}
+  `);
+}
+
+function copyReviewPrompt(btn) {
+  const text = REVIEW_SYSTEM + '\n\n---\n\n' + buildReviewData();
+  navigator.clipboard.writeText(text).then(() => {
+    const old = btn.textContent;
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = old; }, 1600);
+  }).catch(() => alert('Could not access the clipboard.'));
+}
+
+async function generateReview() {
+  const btn = $('#reviewGenBtn');
+  const out = $('#reviewOutput');
+  btn.disabled = true;
+  btn.textContent = 'Thinking…';
+  out.innerHTML = '<p class="small-print">Claude is reading your week…</p>';
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': STATE.settings.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-opus-4-8',
+        max_tokens: 1500,
+        system: REVIEW_SYSTEM,
+        messages: [{ role: 'user', content: buildReviewData() }],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      const msg = err && err.error ? err.error.message : 'HTTP ' + res.status;
+      throw new Error(res.status === 401 ? 'Invalid API key — check it in Settings.' : msg);
+    }
+    const data = await res.json();
+    if (data.stop_reason === 'refusal') throw new Error('The model declined this request — try again later or use the copy-prompt option.');
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if (!text) throw new Error('Empty response.');
+    if (!STATE.reviews) STATE.reviews = [];
+    STATE.reviews.unshift({ ts: new Date().toISOString(), weekEnding: L.todayStr(), text, source: 'claude' });
+    save();
+    out.innerHTML = `<div class="review-text">${esc(text)}</div>`;
+  } catch (e) {
+    const offline = !navigator.onLine;
+    out.innerHTML = `<p class="review-error">${offline ? 'You appear to be offline.' : 'Could not generate: ' + esc(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ Generate review';
+  }
 }
 
 /* ---------- Rewards view ---------- */
@@ -350,7 +488,32 @@ function renderSettings() {
   const view = $('#view-settings');
   const archived = STATE.habits.filter(h => h.archivedAt);
 
+  const key = STATE.settings.apiKey || '';
+  const rem = STATE.settings.reminders;
+
   view.innerHTML = `
+    <h2 class="section-title">AI weekly review</h2>
+    <div class="settings-card">
+      <h3>Claude API key</h3>
+      <p>Enables one-tap weekly reviews. Your week's data is sent to Anthropic only when you tap Generate. Get a key at <b>console.anthropic.com</b> (a few dollars of credit lasts a long time — each review costs about 2 cents). Stored only on this device.</p>
+      <div class="row">
+        <input type="password" id="apiKeyInput" class="key-input" placeholder="sk-ant-…" value="${esc(key)}" autocomplete="off">
+        <button class="btn small" onclick="saveApiKey()">Save</button>
+        ${key ? `<button class="btn small" onclick="testApiKey(this)">Test</button>` : ''}
+      </div>
+      <p class="small-print" id="apiKeyStatus">${key ? 'Key saved ✓' : 'No key — the review screen offers a copy-paste prompt instead.'}</p>
+    </div>
+
+    <h2 class="section-title">Reminders</h2>
+    <div class="settings-card">
+      <h3>Daily check-in reminder</h3>
+      <p>Best effort: on Android Chrome (installed app) the browser wakes up roughly once or twice a day to nudge you — the exact time is up to the browser. For a reminder at an exact time, a normal phone alarm is still the most reliable.</p>
+      <div class="row">
+        <button class="btn" onclick="enableReminders()">${rem ? 'Re-enable reminders' : '&#128276; Enable reminders'}</button>
+      </div>
+      <p class="small-print">${rem === 'periodic' ? 'Background reminders active ✓' : rem === 'granted' ? 'Notifications allowed, but this browser cannot schedule background reminders — use a phone alarm.' : ''}</p>
+    </div>
+
     <h2 class="section-title">Backup</h2>
     <div class="settings-card">
       <h3>Export / import data</h3>
@@ -382,6 +545,73 @@ function renderSettings() {
     <p class="small-print">Earn It v1 &middot; all data stored locally in your browser &middot; nothing is sent anywhere.</p>`;
 
   $('#importFile').addEventListener('change', onImportFile);
+}
+
+/* ---------- API key + reminders ---------- */
+
+function saveApiKey() {
+  const val = $('#apiKeyInput').value.trim();
+  STATE.settings.apiKey = val || undefined;
+  save();
+  render();
+}
+
+async function testApiKey(btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const status = $('#apiKeyStatus');
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': STATE.settings.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    status.textContent = res.ok ? 'Key works ✓' : (res.status === 401 ? 'Key rejected — check for typos.' : 'API error: HTTP ' + res.status);
+  } catch (e) {
+    status.textContent = 'Could not reach the API — are you online?';
+  }
+  btn.disabled = false;
+  btn.textContent = 'Test';
+}
+
+async function enableReminders() {
+  if (!('Notification' in window)) { alert('Notifications are not supported in this browser.'); return; }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { alert('Notifications were not allowed. You can change this in your browser/site settings.'); return; }
+
+  let periodic = false;
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      if ('periodicSync' in reg) {
+        const st = await navigator.permissions.query({ name: 'periodic-background-sync' });
+        if (st.state === 'granted') {
+          await reg.periodicSync.register('earnit-reminder', { minInterval: 18 * 60 * 60 * 1000 });
+          periodic = true;
+        }
+      }
+      reg.showNotification('Earn It', {
+        body: periodic
+          ? 'Reminders on — you’ll get a nudge about your daily check-in. \u{1F4AA}'
+          : 'Notifications enabled. This browser can’t schedule background reminders, so set a phone alarm too.',
+        icon: 'icons/icon-192.png',
+      });
+    }
+  } catch (e) {
+    console.warn('reminder setup', e);
+  }
+
+  STATE.settings.reminders = periodic ? 'periodic' : 'granted';
+  saveRender();
 }
 
 /* ================= actions ================= */
@@ -490,6 +720,11 @@ function openHabitModal(id) {
       <label for="habitMilestone">Milestone (days)</label>
       <input type="number" id="habitMilestone" min="1" max="365" inputmode="numeric" value="${h ? h.milestone : 21}">
     </div>
+    <div class="field">
+      <label for="habitStart">Started on</label>
+      <input type="date" id="habitStart" max="${L.todayStr()}" value="${h ? L.createdDay(h) : L.todayStr()}">
+      <div class="seg-hint">Backdate this if you've already been at it. Quit habits count clean from this date automatically; for build habits, tick off the past days in the week strip or History.</div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn primary" onclick="saveHabit(${h ? `'${h.id}'` : 'null'})">${h ? 'Save' : 'Add habit'}</button>
@@ -523,16 +758,20 @@ function saveHabit(id) {
   const milestone = Math.max(1, Math.min(365, parseInt($('#habitMilestone').value, 10) || 21));
   if (!name) { alert('Give the habit a name.'); return; }
 
+  let start = ($('#habitStart').value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || start > L.todayStr()) start = L.todayStr();
+  const createdAt = start + 'T00:00:00';
+
   if (id) {
     const h = STATE.habits.find(x => x.id === id);
-    if (h) { h.name = name; h.type = habitFormType; h.milestone = milestone; }
+    if (h) { h.name = name; h.type = habitFormType; h.milestone = milestone; h.createdAt = createdAt; }
   } else {
     STATE.habits.push({
       id: uid(),
       name,
       type: habitFormType,
       milestone,
-      createdAt: new Date().toISOString(),
+      createdAt,
       archivedAt: null,
     });
   }

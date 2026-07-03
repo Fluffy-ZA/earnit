@@ -499,5 +499,62 @@ h2.section-title {
 }
 .heat-legend .dot { display: inline-block; vertical-align: middle; margin-right: 3px; }
 
+/* ---------- weekly review ---------- */
+.review-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.chip-stat {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.review-text {
+  white-space: pre-wrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 10px 0;
+}
+.review-error { color: var(--bad); font-size: 0.85rem; margin: 10px 0; }
+.linklike {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* ---------- settings extras ---------- */
+.key-input {
+  flex: 1;
+  min-width: 140px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+.key-input:focus { outline: none; border-color: var(--accent-dim); }
+.field input[type="date"] {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color-scheme: dark;
+}
+
 .muted { color: var(--muted); }
 .small-print { font-size: 0.75rem; color: var(--muted); margin-top: 10px; }

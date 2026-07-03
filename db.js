@@ -6,7 +6,7 @@ const EarnDB = (() => {
   const VERSION = 1;
 
   function defaults() {
-    return { version: VERSION, habits: [], days: {}, rewards: [], settings: {} };
+    return { version: VERSION, habits: [], days: {}, rewards: [], reviews: [], settings: {} };
   }
 
   // Fill any missing top-level fields; future schema bumps hook in here.
@@ -18,6 +18,7 @@ const EarnDB = (() => {
       habits: Array.isArray(s.habits) ? s.habits : d.habits,
       days: (s.days && typeof s.days === 'object') ? s.days : d.days,
       rewards: Array.isArray(s.rewards) ? s.rewards : d.rewards,
+      reviews: Array.isArray(s.reviews) ? s.reviews : d.reviews,
       settings: (s.settings && typeof s.settings === 'object') ? s.settings : d.settings,
     };
   }

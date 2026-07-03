@@ -133,5 +133,72 @@ const EarnLogic = (() => {
     return dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : null;
   }
 
-  return { todayStr, addDays, status, createdDay, activeHabits, streak, unlocked, progress, daySummary, mondayOf, urgesOn, moodOn, firstTrackedDay };
+  /* Aggregate the last `span` days ending at endDate — feeds the weekly review. */
+  function weeklyStats(habits, days, endDate, span = 7) {
+    const act = activeHabits(habits);
+    const dates = [];
+    for (let i = span - 1; i >= 0; i--) dates.push(addDays(endDate, -i));
+
+    const habitStats = act.map(h => {
+      const created = createdDay(h);
+      let done = 0, expected = 0;
+      const failedDates = [], missedDates = [];
+      for (const d of dates) {
+        if (created > d) continue;
+        const s = status(days, d, h.id);
+        if (h.type === 'do') {
+          expected++;
+          if (s === 'done') done++;
+          else if (s === 'failed') failedDates.push(d);
+          else if (d !== endDate) missedDates.push(d); // today pending isn't a miss
+        } else if (s === 'failed') {
+          failedDates.push(d);
+        }
+      }
+      return { habit: h, done, expected, failedDates, missedDates, streak: streak(h, days, endDate) };
+    });
+
+    let urgeTotal = 0;
+    const urgeLog = [], moodLog = [];
+    for (const d of dates) {
+      for (const u of urgesOn(days, d)) {
+        urgeTotal++;
+        const h = habits.find(x => x.id === u.habitId);
+        urgeLog.push({ date: d, habit: h ? h.name : 'unknown', note: u.note || '' });
+      }
+      const m = moodOn(days, d);
+      if (m && (m.score || m.energy || m.note)) {
+        moodLog.push({ date: d, score: m.score || null, energy: m.energy || null, note: m.note || '' });
+      }
+    }
+
+    const avg = a => (a.length ? Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10 : null);
+    const moodAvg = avg(moodLog.map(m => m.score).filter(Boolean));
+    const energyAvg = avg(moodLog.map(m => m.energy).filter(Boolean));
+
+    // urges/day on days a build-habit was missed vs done — the "more urges when you skip walking" signal
+    const correlations = habitStats
+      .filter(s => s.habit.type === 'do')
+      .map(s => {
+        let onMissed = 0, onDone = 0, missedN = 0, doneN = 0;
+        for (const d of dates) {
+          if (createdDay(s.habit) > d) continue;
+          const st = status(days, d, s.habit.id);
+          const n = urgesOn(days, d).length;
+          if (st === 'done') { doneN++; onDone += n; }
+          else if (d !== endDate) { missedN++; onMissed += n; }
+        }
+        return {
+          habit: s.habit.name,
+          missedDays: missedN,
+          doneDays: doneN,
+          urgesPerMissedDay: missedN ? +(onMissed / missedN).toFixed(2) : null,
+          urgesPerDoneDay: doneN ? +(onDone / doneN).toFixed(2) : null,
+        };
+      });
+
+    return { span, startDate: dates[0], endDate, habitStats, urgeTotal, urgeLog, moodLog, moodAvg, energyAvg, correlations };
+  }
+
+  return { todayStr, addDays, status, createdDay, activeHabits, streak, unlocked, progress, daySummary, mondayOf, urgesOn, moodOn, firstTrackedDay, weeklyStats };
 })();

@@ -1,7 +1,7 @@
 /* sw.js — cache-first service worker for the app shell.
    Bump CACHE_VERSION on every release to push updates to installed clients. */
 
-const CACHE_VERSION = 'earnit-v1.1.0';
+const CACHE_VERSION = 'earnit-v1.2.0';
 const ASSETS = [
   '.',
   'index.html',
@@ -26,6 +26,28 @@ self.addEventListener('activate', e => {
     caches.keys()
       .then(keys => Promise.all(keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
+  );
+});
+
+// Best-effort daily reminder (periodic background sync — Chrome on Android, installed PWA)
+self.addEventListener('periodicsync', e => {
+  if (e.tag === 'earnit-reminder') {
+    e.waitUntil(self.registration.showNotification('Earn It', {
+      body: 'Daily check-in — mark your habits and log how today felt \u{1F4AA}',
+      icon: 'icons/icon-192.png',
+      badge: 'icons/icon-192.png',
+      tag: 'earnit-reminder',
+    }));
+  }
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const c of list) if ('focus' in c) return c.focus();
+      return clients.openWindow('.');
+    })
   );
 });
 
