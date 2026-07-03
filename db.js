@@ -3,10 +3,20 @@
 
 const EarnDB = (() => {
   const KEY = 'earnit_state';
-  const VERSION = 1;
+  const VERSION = 2; // v2: habits gained measure ('check'|'minutes'), per ('day'|'week'), goal
 
   function defaults() {
     return { version: VERSION, habits: [], days: {}, rewards: [], reviews: [], settings: {} };
+  }
+
+  // v1 habits were all check-off daily habits with an implicit goal of 1
+  function migrateHabit(h) {
+    return {
+      ...h,
+      measure: h.measure === 'minutes' ? 'minutes' : 'check',
+      per: h.per === 'week' ? 'week' : 'day',
+      goal: (typeof h.goal === 'number' && h.goal > 0) ? h.goal : 1,
+    };
   }
 
   // Fill any missing top-level fields; future schema bumps hook in here.
@@ -15,7 +25,7 @@ const EarnDB = (() => {
     const d = defaults();
     return {
       version: VERSION,
-      habits: Array.isArray(s.habits) ? s.habits : d.habits,
+      habits: Array.isArray(s.habits) ? s.habits.map(migrateHabit) : d.habits,
       days: (s.days && typeof s.days === 'object') ? s.days : d.days,
       rewards: Array.isArray(s.rewards) ? s.rewards : d.rewards,
       reviews: Array.isArray(s.reviews) ? s.reviews : d.reviews,

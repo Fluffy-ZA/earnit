@@ -16,6 +16,27 @@ function uid() {
 function save() { EarnDB.save(STATE); }
 function saveRender() { save(); render(); }
 
+// Credit ledgers for every habit, recomputed once per render
+let LEDGERS = {};
+
+function fmtMin(m) {
+  m = Math.round(m);
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h && r) return `${h}h ${r}m`;
+  if (h) return `${h}h`;
+  return `${r}m`;
+}
+// Format an amount in a habit's own unit (minutes → "1h 30m", checks → count)
+function fmtAmt(h, n) { return L.isTimed(h) ? fmtMin(n) : String(n); }
+
+// Short description of a habit's goal, e.g. "3h/day", "3×/week"
+function goalLabel(h) {
+  const g = L.goalOf(h);
+  if (L.isTimed(h)) return `${fmtMin(g)}/${L.isWeekly(h) ? 'week' : 'day'}`;
+  if (L.isWeekly(h)) return `${g}×/week`;
+  return 'daily';
+}
+
 /* ================= navigation ================= */
 
 let currentView = 'today';
@@ -35,6 +56,7 @@ document.querySelectorAll('.tab').forEach(t =>
 
 function render() {
   const today = L.todayStr();
+  LEDGERS = L.allLedgers(STATE.habits, STATE.days, today);
   renderHeader(today);
   if (currentView === 'today') renderToday(today);
   if (currentView === 'history') renderHistory(today);
@@ -196,7 +218,7 @@ function weekStripHTML(today) {
     const date = L.addDays(today, -i);
     const [y, m, d] = date.split('-').map(Number);
     const dow = new Date(y, m - 1, d).toLocaleDateString('en', { weekday: 'short' }).slice(0, 2);
-    const summary = L.daySummary(STATE.habits, STATE.days, date);
+    const summary = L.daySummary(STATE.habits, STATE.days, date, LEDGERS);
     cells.push(`
       <button class="day-cell${date === today ? ' today' : ''}" onclick="openDayModal('${date}')" title="Edit ${date}">
         <div class="dow">${dow}</div>
@@ -208,19 +230,44 @@ function weekStripHTML(today) {
 }
 
 function habitCardHTML(h, today) {
-  const s = L.streak(h, STATE.days, today);
+  const led = LEDGERS[h.id] || { bank: 0, streak: 0, current: { amount: 0, goal: 1 } };
+  const s = h.type === 'avoid' ? L.streak(h, STATE.days, today) : led.streak;
   const met = s >= h.milestone;
   const ratio = h.milestone > 0 ? Math.min(1, s / h.milestone) : 1;
   const st = L.status(STATE.days, today, h.id);
+  const unitWord = L.isWeekly(h) ? 'week' : 'day';
 
   const urgesToday = L.urgesOn(STATE.days, today).filter(u => u.habitId === h.id).length;
   const urgeBtn = `<button class="btn small urge-btn" onclick="openUrgeModal('${h.id}')" title="Log an urge you resisted">&#128170;${urgesToday ? ` &times;${urgesToday}` : ''}</button>`;
 
-  let actions;
+  let actions, progressLine = '';
   if (h.type === 'do') {
-    actions = (st === 'done'
-      ? `<button class="btn done grow" onclick="setHabitStatus('${h.id}','${today}',null)">&#10003; Done today</button>`
-      : `<button class="btn primary grow" onclick="setHabitStatus('${h.id}','${today}','done')">Mark done today</button>`) + urgeBtn;
+    const goal = L.goalOf(h);
+    const amt = led.current.amount; // today's or this week's total
+    const hit = amt >= goal;
+    const span = L.isWeekly(h) ? 'this week' : 'today';
+
+    if (L.isTimed(h)) {
+      progressLine = `<div class="amount-line${hit ? ' hit' : ''}">${fmtMin(amt)} <span class="muted">/ ${fmtMin(goal)} ${span}</span>${hit ? ' &#10003;' : ''}</div>`;
+      actions = `
+        <button class="btn small" onclick="logAmount('${h.id}','${today}',15)">+15m</button>
+        <button class="btn small" onclick="logAmount('${h.id}','${today}',30)">+30m</button>
+        <button class="btn small" onclick="logAmount('${h.id}','${today}',60)">+1h</button>
+        <button class="btn small" onclick="promptMinutes('${h.id}','${today}')">+&hellip;</button>
+        ${urgeBtn}`;
+    } else if (L.isWeekly(h) || goal > 1) {
+      const todayAmt = L.amountOn(STATE.days, today, h.id);
+      progressLine = `<div class="amount-line${hit ? ' hit' : ''}">${amt} <span class="muted">/ ${goal} ${span}</span>${hit ? ' &#10003;' : ''}</div>`;
+      actions = `
+        <button class="btn primary grow" onclick="logAmount('${h.id}','${today}',1)">+ Log 1 today${todayAmt ? ` (${todayAmt})` : ''}</button>
+        ${todayAmt ? `<button class="btn small" onclick="logAmount('${h.id}','${today}',-1)" title="Remove one from today">&minus;</button>` : ''}
+        ${urgeBtn}`;
+    } else {
+      const doneToday = st === 'done' || amt >= 1;
+      actions = (doneToday
+        ? `<button class="btn done grow" onclick="setHabitStatus('${h.id}','${today}',null)">&#10003; Done today</button>`
+        : `<button class="btn primary grow" onclick="setHabitStatus('${h.id}','${today}','done')">Mark done today</button>`) + urgeBtn;
+    }
   } else {
     actions = st === 'failed'
       ? `<span class="clean-note slipped">Slipped today</span>
@@ -231,20 +278,52 @@ function habitCardHTML(h, today) {
          <button class="btn small danger-ghost" onclick="confirmSlip('${h.id}','${today}')">I slipped</button>`;
   }
 
+  const goalChip = (h.type === 'do' && (L.isTimed(h) || L.isWeekly(h) || L.goalOf(h) > 1))
+    ? `<span class="chip goal">${goalLabel(h)}</span>` : '';
+  const bankChip = (h.type === 'do' && led.bank > 0)
+    ? `<span class="bank-chip" title="Banked extra — automatically covers a future short ${unitWord}">&#128179; ${fmtAmt(h, led.bank)} credit</span>` : '';
+
   return `
     <div class="habit-card">
       <div class="habit-top">
         <span class="habit-name">${esc(h.name)}</span>
+        ${goalChip}
         <span class="chip ${h.type}">${h.type === 'do' ? 'BUILD' : 'QUIT'}</span>
         <button class="icon-btn" onclick="openHabitModal('${h.id}')" title="Edit habit">&#9998;</button>
       </div>
       <div class="habit-streak">
         <span class="${met ? 'met' : ''}">&#128293; ${s}</span>
-        <span class="muted">/ ${h.milestone} day milestone${met ? ' — met!' : ''}</span>
+        <span class="muted">/ ${h.milestone} ${unitWord} milestone${met ? ' — met!' : ''}</span>
+        ${bankChip}
       </div>
       <div class="bar"><div class="bar-fill ${met ? 'met' : ''}" style="width:${Math.round(ratio * 100)}%"></div></div>
+      ${progressLine}
       <div class="habit-actions">${actions}</div>
     </div>`;
+}
+
+/* Add/remove units (sessions or minutes) on a date. Numbers replace any
+   'done'/'failed' marker; hitting 0 clears the entry entirely. */
+function logAmount(habitId, date, delta) {
+  const next = Math.max(0, L.amountOn(STATE.days, date, habitId) + delta);
+  const day = ensureDay(date);
+  if (!day.habits) day.habits = {};
+  if (next === 0) delete day.habits[habitId];
+  else day.habits[habitId] = next;
+  save();
+  // refresh the day-editor row if the day modal is open
+  const h = STATE.habits.find(x => x.id === habitId);
+  const row = $('#dayrow-' + habitId);
+  if (h && row) row.outerHTML = dayEditRowHTML(h, date);
+  render();
+}
+
+function promptMinutes(habitId, date) {
+  const v = prompt('Minutes to add (negative to remove):');
+  if (v === null) return;
+  const n = parseInt(v, 10);
+  if (!n) return;
+  logAmount(habitId, date, n);
 }
 
 /* ---------- History view (12-week heatmap) ---------- */
@@ -273,7 +352,7 @@ function renderHistory(today) {
     for (let i = 0; i < 7; i++) {
       const date = L.addDays(monday, i);
       if (date > today) { cells.push('<span class="heat-cell future"></span>'); continue; }
-      const summary = L.daySummary(STATE.habits, STATE.days, date);
+      const summary = L.daySummary(STATE.habits, STATE.days, date, LEDGERS);
       const urges = L.urgesOn(STATE.days, date).length;
       const mood = L.moodOn(STATE.days, date);
       const moodBar = (mood && mood.score)
@@ -310,6 +389,8 @@ function renderHistory(today) {
 
 const REVIEW_SYSTEM = `You are the weekly-review coach inside "Earn It", a private habit tracker and recovery companion. The user is working to quit compulsive habits and build daily ones. You receive one week of their logged data.
 
+Some build habits are weekly (e.g. gym 3x/week) or measured in minutes rather than check-offs. Doing extra banks "credit" that automatically covers a later short day or week — a day marked "covered by credit" is fine, not a failure.
+
 Write a short weekly review (under 300 words), plain text, short paragraphs, simple hyphen bullets where useful:
 1. Open with one genuine, specific encouragement grounded in the data.
 2. Point out real patterns (links between urges, missed habits, mood, energy, weekdays). Only claim patterns the data actually supports; if there's too little data, say so gently.
@@ -324,12 +405,21 @@ function buildReviewData() {
 
   lines.push('Habits and current streaks:');
   for (const h of s.habitStats) {
-    if (h.habit.type === 'do') {
-      let l = `- ${h.habit.name} (build daily, goal ${h.habit.milestone} days): streak ${h.streak}d, done ${h.done}/${h.expected} days this week`;
-      if (h.missedDates.length) l += `, missed on ${h.missedDates.join(', ')}`;
+    const hb = h.habit;
+    if (hb.type === 'do') {
+      let l;
+      if (L.isWeekly(hb)) {
+        l = `- ${hb.name} (build, ${goalLabel(hb)}, milestone ${hb.milestone} weeks): streak ${h.streak} weeks, this week ${fmtAmt(hb, h.weekAmount)} of ${fmtAmt(hb, h.goal)}`;
+      } else {
+        l = `- ${hb.name} (build, ${goalLabel(hb)}, milestone ${hb.milestone} days): streak ${h.streak}d, hit goal ${h.done}/${h.expected} days this week`;
+        if (L.isTimed(hb)) l += `, ${fmtMin(h.amount)} logged in total`;
+        if (h.coveredDates.length) l += `, short but covered by credit on ${h.coveredDates.join(', ')}`;
+        if (h.missedDates.length) l += `, missed on ${h.missedDates.join(', ')}`;
+      }
+      if (h.bank > 0) l += `, credit bank ${fmtAmt(hb, h.bank)}`;
       lines.push(l);
     } else {
-      lines.push(`- ${h.habit.name} (quit, goal ${h.habit.milestone} days clean): streak ${h.streak}d, ${h.failedDates.length ? 'slipped on ' + h.failedDates.join(', ') : 'clean all week'}`);
+      lines.push(`- ${hb.name} (quit, goal ${hb.milestone} days clean): streak ${h.streak}d, ${h.failedDates.length ? 'slipped on ' + h.failedDates.join(', ') : 'clean all week'}`);
     }
   }
 
@@ -366,7 +456,9 @@ function openReviewModal() {
       ${s.energyAvg ? `<span class="chip-stat">energy &#9889;${s.energyAvg}/5</span>` : ''}
       ${s.habitStats.map(h => `<span class="chip-stat">${esc(h.habit.name)}: ${
         h.habit.type === 'do'
-          ? `${h.done}/${h.expected}d`
+          ? (L.isWeekly(h.habit)
+              ? `${fmtAmt(h.habit, h.weekAmount)}/${fmtAmt(h.habit, h.goal)} this wk`
+              : `${h.done}/${h.expected}d`)
           : (h.failedDates.length ? `${h.failedDates.length} slip${h.failedDates.length === 1 ? '' : 's'}` : 'clean &#10003;')
       }</span>`).join('')}
     </div>`;
@@ -698,26 +790,51 @@ $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeM
 /* ---------- habit form ---------- */
 
 let habitFormType = 'do';
+let habitFormMeasure = 'check';
+let habitFormPer = 'day';
 
 function openHabitModal(id) {
   const h = id ? STATE.habits.find(x => x.id === id) : null;
   habitFormType = h ? h.type : 'do';
+  habitFormMeasure = h && h.measure === 'minutes' ? 'minutes' : 'check';
+  habitFormPer = h && h.per === 'week' ? 'week' : 'day';
   openModal(`
     <h3>${h ? 'Edit habit' : 'New habit'}</h3>
     <div class="field">
       <label for="habitName">Habit</label>
-      <input type="text" id="habitName" placeholder='e.g. "No porn", "Walk daily", "Read"' value="${h ? esc(h.name) : ''}" maxlength="60">
+      <input type="text" id="habitName" placeholder='e.g. "No porn", "Gym", "Read"' value="${h ? esc(h.name) : ''}" maxlength="60">
     </div>
     <div class="field">
       <label>Type</label>
       <div class="seg" id="habitTypeSeg">
-        <button class="${habitFormType === 'do' ? 'on' : ''}" onclick="setHabitFormType('do')">Build (do daily)</button>
+        <button class="${habitFormType === 'do' ? 'on' : ''}" onclick="setHabitFormType('do')">Build (do)</button>
         <button class="${habitFormType === 'avoid' ? 'on bad' : ''}" onclick="setHabitFormType('avoid')">Quit (avoid)</button>
       </div>
       <div class="seg-hint" id="habitTypeHint">${habitTypeHint()}</div>
     </div>
+    <div id="habitDoOpts" ${habitFormType === 'avoid' ? 'style="display:none"' : ''}>
+      <div class="field">
+        <label>Measure</label>
+        <div class="seg" id="habitMeasureSeg">
+          <button class="${habitFormMeasure === 'check' ? 'on' : ''}" onclick="setHabitFormMeasure('check')">Check-off</button>
+          <button class="${habitFormMeasure === 'minutes' ? 'on' : ''}" onclick="setHabitFormMeasure('minutes')">Minutes</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Frequency</label>
+        <div class="seg" id="habitPerSeg">
+          <button class="${habitFormPer === 'day' ? 'on' : ''}" onclick="setHabitFormPer('day')">Daily</button>
+          <button class="${habitFormPer === 'week' ? 'on' : ''}" onclick="setHabitFormPer('week')">Weekly</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="habitGoal" id="habitGoalLabel">${goalFieldLabel()}</label>
+        <input type="number" id="habitGoal" min="1" max="10000" inputmode="numeric" value="${h ? L.goalOf(h) : 1}">
+        <div class="seg-hint">e.g. gym 3&times;/week, or 180 minutes of study per day. Doing extra banks credit that automatically covers a future short day or week.</div>
+      </div>
+    </div>
     <div class="field">
-      <label for="habitMilestone">Milestone (days)</label>
+      <label for="habitMilestone" id="habitMilestoneLabel">${milestoneFieldLabel()}</label>
       <input type="number" id="habitMilestone" min="1" max="365" inputmode="numeric" value="${h ? h.milestone : 21}">
     </div>
     <div class="field">
@@ -741,8 +858,24 @@ function openHabitModal(id) {
 
 function habitTypeHint() {
   return habitFormType === 'do'
-    ? 'You must check it off every day — a missed day breaks the streak.'
+    ? 'Hit the goal each day (or week) — extra effort banks credit that covers a short one later.'
     : 'Clean by default — only logging a slip breaks the streak.';
+}
+
+function goalFieldLabel() {
+  return (habitFormMeasure === 'minutes' ? 'Minutes' : 'Times')
+    + ' per ' + (habitFormPer === 'week' ? 'week' : 'day');
+}
+
+function milestoneFieldLabel() {
+  return `Milestone (${habitFormType === 'do' && habitFormPer === 'week' ? 'weeks' : 'days'})`;
+}
+
+function updateHabitFormLabels() {
+  const gl = $('#habitGoalLabel');
+  if (gl) gl.textContent = goalFieldLabel();
+  const ml = $('#habitMilestoneLabel');
+  if (ml) ml.textContent = milestoneFieldLabel();
 }
 
 function setHabitFormType(type) {
@@ -751,6 +884,25 @@ function setHabitFormType(type) {
   btns[0].className = type === 'do' ? 'on' : '';
   btns[1].className = type === 'avoid' ? 'on bad' : '';
   $('#habitTypeHint').textContent = habitTypeHint();
+  const opts = $('#habitDoOpts');
+  if (opts) opts.style.display = type === 'do' ? '' : 'none';
+  updateHabitFormLabels();
+}
+
+function setHabitFormMeasure(m) {
+  habitFormMeasure = m;
+  const btns = document.querySelectorAll('#habitMeasureSeg button');
+  btns[0].className = m === 'check' ? 'on' : '';
+  btns[1].className = m === 'minutes' ? 'on' : '';
+  updateHabitFormLabels();
+}
+
+function setHabitFormPer(p) {
+  habitFormPer = p;
+  const btns = document.querySelectorAll('#habitPerSeg button');
+  btns[0].className = p === 'day' ? 'on' : '';
+  btns[1].className = p === 'week' ? 'on' : '';
+  updateHabitFormLabels();
 }
 
 function saveHabit(id) {
@@ -758,18 +910,31 @@ function saveHabit(id) {
   const milestone = Math.max(1, Math.min(365, parseInt($('#habitMilestone').value, 10) || 21));
   if (!name) { alert('Give the habit a name.'); return; }
 
+  const measure = habitFormType === 'do' ? habitFormMeasure : 'check';
+  const per = habitFormType === 'do' ? habitFormPer : 'day';
+  const goalEl = $('#habitGoal');
+  const goal = habitFormType === 'do'
+    ? Math.max(1, Math.min(10000, parseInt(goalEl ? goalEl.value : '1', 10) || 1))
+    : 1;
+
   let start = ($('#habitStart').value || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || start > L.todayStr()) start = L.todayStr();
   const createdAt = start + 'T00:00:00';
 
   if (id) {
     const h = STATE.habits.find(x => x.id === id);
-    if (h) { h.name = name; h.type = habitFormType; h.milestone = milestone; h.createdAt = createdAt; }
+    if (h) {
+      h.name = name; h.type = habitFormType; h.milestone = milestone; h.createdAt = createdAt;
+      h.measure = measure; h.per = per; h.goal = goal;
+    }
   } else {
     STATE.habits.push({
       id: uid(),
       name,
       type: habitFormType,
+      measure,
+      per,
+      goal,
       milestone,
       createdAt,
       archivedAt: null,
@@ -871,22 +1036,44 @@ function openDayModal(date) {
 
 function dayEditRowHTML(h, date) {
   const st = L.status(STATE.days, date, h.id);
-  const labels = h.type === 'do'
-    ? { none: 'Not done', done: 'Done', failed: 'Failed' }
-    : { none: 'Clean', done: 'Clean+', failed: 'Slipped' };
-  const seg = h.type === 'do'
-    ? `
-      <button class="${st === null ? 'on' : ''}" onclick="dayEditSet('${h.id}','${date}',null)">${labels.none}</button>
-      <button class="${st === 'done' ? 'on good' : ''}" onclick="dayEditSet('${h.id}','${date}','done')">${labels.done}</button>
-      <button class="${st === 'failed' ? 'on bad' : ''}" onclick="dayEditSet('${h.id}','${date}','failed')">${labels.failed}</button>`
-    : `
-      <button class="${st !== 'failed' ? 'on good' : ''}" onclick="dayEditSet('${h.id}','${date}',null)">${labels.none}</button>
-      <button class="${st === 'failed' ? 'on bad' : ''}" onclick="dayEditSet('${h.id}','${date}','failed')">${labels.failed}</button>`;
+  const amt = L.amountOn(STATE.days, date, h.id);
+  let control;
+  if (h.type === 'avoid') {
+    control = `<div class="seg">
+      <button class="${st !== 'failed' ? 'on good' : ''}" onclick="dayEditSet('${h.id}','${date}',null)">Clean</button>
+      <button class="${st === 'failed' ? 'on bad' : ''}" onclick="dayEditSet('${h.id}','${date}','failed')">Slipped</button>
+    </div>`;
+  } else if (L.isTimed(h)) {
+    control = `<div class="amount-edit">
+      <input type="number" min="0" max="10000" inputmode="numeric" value="${amt || ''}" placeholder="0"
+        onchange="dayEditSetAmount('${h.id}','${date}',this.value)">
+      <span class="muted">minutes (goal ${goalLabel(h)})</span>
+    </div>`;
+  } else if (L.isWeekly(h) || L.goalOf(h) > 1) {
+    control = `<div class="stepper">
+      <button class="btn small" onclick="logAmount('${h.id}','${date}',-1)" ${amt ? '' : 'disabled'}>&minus;</button>
+      <span class="stepper-count">${amt}</span>
+      <button class="btn small" onclick="logAmount('${h.id}','${date}',1)">+</button>
+      <span class="muted">${L.isWeekly(h) ? `that day (goal ${goalLabel(h)})` : `of ${L.goalOf(h)} that day`}</span>
+    </div>`;
+  } else {
+    const isDone = st === 'done' || amt >= 1;
+    control = `<div class="seg">
+      <button class="${!isDone && st !== 'failed' ? 'on' : ''}" onclick="dayEditSet('${h.id}','${date}',null)">Not done</button>
+      <button class="${isDone ? 'on good' : ''}" onclick="dayEditSet('${h.id}','${date}','done')">Done</button>
+      <button class="${st === 'failed' ? 'on bad' : ''}" onclick="dayEditSet('${h.id}','${date}','failed')">Failed</button>
+    </div>`;
+  }
   return `
     <div class="day-edit-habit" id="dayrow-${h.id}">
       <div class="name">${esc(h.name)} <span class="chip ${h.type}">${h.type === 'do' ? 'BUILD' : 'QUIT'}</span></div>
-      <div class="seg">${seg}</div>
+      ${control}
     </div>`;
+}
+
+function dayEditSetAmount(habitId, date, value) {
+  const n = Math.max(0, Math.min(10000, parseInt(value, 10) || 0));
+  logAmount(habitId, date, n - L.amountOn(STATE.days, date, habitId));
 }
 
 function dayEditSet(habitId, date, value) {

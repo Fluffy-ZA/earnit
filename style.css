@@ -183,7 +183,24 @@ h2.section-title {
 }
 .bar-fill.met { background: var(--good); }
 
-.habit-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.habit-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+
+/* amount progress + credit bank (weekly / timed habits) */
+.amount-line { margin-top: 8px; font-size: 0.95rem; font-weight: 700; }
+.amount-line .muted { font-weight: 500; font-size: 0.8rem; }
+.amount-line.hit { color: var(--good); }
+.bank-chip {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--accent);
+  background: #241a05;
+  border: 1px solid var(--accent-dim);
+  border-radius: 99px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.chip.goal { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -391,6 +408,23 @@ h2.section-title {
 }
 .day-edit-habit:last-child { border-bottom: none; }
 .day-edit-habit .name { font-weight: 700; font-size: 0.92rem; margin-bottom: 8px; }
+
+/* day editor: minute input + session stepper */
+.amount-edit { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; }
+.amount-edit input {
+  width: 90px;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.amount-edit input:focus { outline: none; border-color: var(--accent-dim); }
+.stepper { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--muted); }
+.stepper .btn { min-width: 42px; }
+.stepper .btn[disabled] { opacity: 0.4; cursor: default; }
+.stepper-count { font-weight: 800; font-size: 1rem; min-width: 18px; text-align: center; color: var(--text); }
 
 /* ---------- mood / energy check-in ---------- */
 .mood-card {
