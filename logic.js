@@ -110,5 +110,28 @@ const EarnLogic = (() => {
     return 'none';
   }
 
-  return { todayStr, addDays, status, createdDay, activeHabits, streak, unlocked, progress, daySummary };
+  // Monday of the week containing dateStr (heatmap rows align Mon–Sun)
+  function mondayOf(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const dow = new Date(y, m - 1, d).getDay(); // 0=Sun..6=Sat
+    return addDays(dateStr, -((dow + 6) % 7));
+  }
+
+  function urgesOn(days, date) {
+    const e = days[date];
+    return (e && e.urges) || [];
+  }
+
+  function moodOn(days, date) {
+    const e = days[date];
+    return (e && e.mood) || null;
+  }
+
+  // Earliest date with any meaning: first habit creation or first logged day
+  function firstTrackedDay(habits, days) {
+    const dates = habits.map(createdDay).concat(Object.keys(days)).filter(Boolean);
+    return dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : null;
+  }
+
+  return { todayStr, addDays, status, createdDay, activeHabits, streak, unlocked, progress, daySummary, mondayOf, urgesOn, moodOn, firstTrackedDay };
 })();

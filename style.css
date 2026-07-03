@@ -392,5 +392,112 @@ h2.section-title {
 .day-edit-habit:last-child { border-bottom: none; }
 .day-edit-habit .name { font-weight: 700; font-size: 0.92rem; margin-bottom: 8px; }
 
+/* ---------- mood / energy check-in ---------- */
+.mood-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.mood-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.mood-label { font-size: 0.78rem; font-weight: 700; color: var(--muted); width: 74px; flex-shrink: 0; }
+.mood-scale { display: flex; gap: 6px; flex: 1; }
+.mood-btn {
+  flex: 1;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 8px 0;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mood-btn.on { background: #10131a; }
+.mood-note {
+  width: 100%;
+  font: inherit;
+  font-size: 0.88rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px 11px;
+}
+.mood-note:focus { outline: none; border-color: var(--accent-dim); }
+
+/* ---------- urges ---------- */
+.urge-btn { white-space: nowrap; }
+.urge-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 0.88rem;
+}
+.urge-body { flex: 1; }
+.urge-note { color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+
+/* ---------- history heatmap ---------- */
+.heat-dow-row, .heat-row {
+  display: grid;
+  grid-template-columns: 34px repeat(7, 1fr);
+  gap: 5px;
+  margin-bottom: 5px;
+  align-items: center;
+}
+.heat-dow { text-align: center; font-size: 0.65rem; font-weight: 700; color: var(--muted); }
+.heat-label { font-size: 0.68rem; font-weight: 700; color: var(--muted); }
+.heat-cell {
+  position: relative;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 4px 0 7px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--text);
+  font: inherit;
+  min-height: 44px;
+  -webkit-tap-highlight-color: transparent;
+}
+.heat-cell:active { transform: scale(0.95); }
+.heat-cell.today { border-color: var(--accent-dim); }
+.heat-cell.future { visibility: hidden; }
+.heat-dom { display: block; font-size: 0.68rem; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
+.heat-cell .dot { width: 8px; height: 8px; }
+.urge-marker {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 0.55rem;
+  line-height: 1;
+}
+.mood-bar {
+  position: absolute;
+  left: 6px; right: 6px; bottom: 3px;
+  height: 3px;
+  border-radius: 2px;
+  background: transparent;
+}
+.mood-bar.demo { position: static; display: inline-block; width: 18px; height: 3px; background: var(--good); }
+.heat-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 12px;
+  font-size: 0.72rem;
+  color: var(--muted);
+  align-items: center;
+}
+.heat-legend .dot { display: inline-block; vertical-align: middle; margin-right: 3px; }
+
 .muted { color: var(--muted); }
 .small-print { font-size: 0.75rem; color: var(--muted); margin-top: 10px; }

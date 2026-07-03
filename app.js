@@ -37,6 +37,7 @@ function render() {
   const today = L.todayStr();
   renderHeader(today);
   if (currentView === 'today') renderToday(today);
+  if (currentView === 'history') renderHistory(today);
   if (currentView === 'rewards') renderRewards(today);
   if (currentView === 'settings') renderSettings();
 }
@@ -75,9 +76,99 @@ function renderToday(today) {
   view.innerHTML = `
     ${bannerHTML(today)}
     ${weekStripHTML(today)}
+    <h2 class="section-title">Daily check-in</h2>
+    ${moodCardHTML(today)}
     <h2 class="section-title">Habits</h2>
     ${act.map(h => habitCardHTML(h, today)).join('')}
     <button class="add-btn" onclick="openHabitModal()">+ Add habit</button>`;
+}
+
+/* ---------- mood / energy check-in ---------- */
+
+const MOOD_FACES = ['', '\u{1F616}', '\u{1F615}', '\u{1F610}', '\u{1F642}', '\u{1F604}'];
+const MOOD_COLORS = ['', '#ef4444', '#f97316', '#f59e0b', '#a3e635', '#22c55e'];
+
+function moodCardHTML(date, ctx = '') {
+  const mood = L.moodOn(STATE.days, date) || {};
+  const scale = (field, label, icons) => `
+    <div class="mood-row">
+      <span class="mood-label">${label}</span>
+      <div class="mood-scale">
+        ${[1,2,3,4,5].map(v => `
+          <button class="mood-btn${mood[field] === v ? ' on' : ''}" style="${mood[field] === v ? `border-color:${MOOD_COLORS[v]};color:${MOOD_COLORS[v]}` : ''}"
+            onclick="setMood('${date}','${field}',${v},'${ctx}')">${icons ? MOOD_FACES[v] : v}</button>`).join('')}
+      </div>
+    </div>`;
+  return `
+    <div class="mood-card">
+      ${scale('score', 'Mood', true)}
+      ${scale('energy', 'Energy ⚡', false)}
+      <input type="text" class="mood-note" id="moodNote-${ctx}${date}" placeholder="Optional note about today…" maxlength="200"
+        value="${esc(mood.note || '')}" onchange="setMoodNote('${date}', this.value)">
+    </div>`;
+}
+
+function ensureDay(date) {
+  if (!STATE.days[date]) STATE.days[date] = { habits: {} };
+  return STATE.days[date];
+}
+
+function setMood(date, field, value, ctx = '') {
+  const day = ensureDay(date);
+  if (!day.mood) day.mood = {};
+  // keep any note typed but not yet committed via change event
+  const noteEl = document.getElementById('moodNote-' + ctx + date);
+  if (noteEl) day.mood.note = noteEl.value.trim();
+  day.mood[field] = (day.mood[field] === value) ? null : value; // tap again to clear
+  saveRender();
+  // if edited from inside the day modal, refresh the modal copy too
+  const modalMood = document.getElementById('modalMood-' + date);
+  if (modalMood) modalMood.innerHTML = moodCardHTML(date, 'm-');
+}
+
+function setMoodNote(date, value) {
+  const day = ensureDay(date);
+  if (!day.mood) day.mood = {};
+  day.mood.note = value.trim();
+  save();
+}
+
+/* ---------- urge logging ---------- */
+
+function openUrgeModal(habitId) {
+  const h = STATE.habits.find(x => x.id === habitId);
+  if (!h) return;
+  openModal(`
+    <h3>&#128170; Urge resisted &mdash; ${esc(h.name)}</h3>
+    <div class="field">
+      <label for="urgeNote">What happened? (optional)</label>
+      <textarea id="urgeNote" rows="3" placeholder="Where were you, what triggered it, what did you do instead…" maxlength="400"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn primary" onclick="logUrge('${h.id}')">Log it</button>
+    </div>
+    <p class="small-print">Every urge you resist and log is proof it passes. The note helps the weekly review find your triggers.</p>
+  `);
+}
+
+function logUrge(habitId) {
+  const note = ($('#urgeNote') ? $('#urgeNote').value.trim() : '');
+  const day = ensureDay(L.todayStr());
+  if (!day.urges) day.urges = [];
+  day.urges.push({ habitId, note, ts: new Date().toISOString() });
+  closeModal();
+  saveRender();
+}
+
+function deleteUrge(date, index) {
+  const day = STATE.days[date];
+  if (!day || !day.urges) return;
+  day.urges.splice(index, 1);
+  if (!day.urges.length) delete day.urges;
+  save();
+  openDayModal(date); // refresh modal contents
+  render();
 }
 
 function bannerHTML(today) {
@@ -122,16 +213,21 @@ function habitCardHTML(h, today) {
   const ratio = h.milestone > 0 ? Math.min(1, s / h.milestone) : 1;
   const st = L.status(STATE.days, today, h.id);
 
+  const urgesToday = L.urgesOn(STATE.days, today).filter(u => u.habitId === h.id).length;
+  const urgeBtn = `<button class="btn small urge-btn" onclick="openUrgeModal('${h.id}')" title="Log an urge you resisted">&#128170;${urgesToday ? ` &times;${urgesToday}` : ''}</button>`;
+
   let actions;
   if (h.type === 'do') {
-    actions = st === 'done'
+    actions = (st === 'done'
       ? `<button class="btn done grow" onclick="setHabitStatus('${h.id}','${today}',null)">&#10003; Done today</button>`
-      : `<button class="btn primary grow" onclick="setHabitStatus('${h.id}','${today}','done')">Mark done today</button>`;
+      : `<button class="btn primary grow" onclick="setHabitStatus('${h.id}','${today}','done')">Mark done today</button>`) + urgeBtn;
   } else {
     actions = st === 'failed'
       ? `<span class="clean-note slipped">Slipped today</span>
+         ${urgeBtn}
          <button class="btn small" onclick="setHabitStatus('${h.id}','${today}',null)">Undo</button>`
       : `<span class="clean-note">Clean today &#10003;</span>
+         ${urgeBtn}
          <button class="btn small danger-ghost" onclick="confirmSlip('${h.id}','${today}')">I slipped</button>`;
   }
 
@@ -149,6 +245,64 @@ function habitCardHTML(h, today) {
       <div class="bar"><div class="bar-fill ${met ? 'met' : ''}" style="width:${Math.round(ratio * 100)}%"></div></div>
       <div class="habit-actions">${actions}</div>
     </div>`;
+}
+
+/* ---------- History view (12-week heatmap) ---------- */
+
+function renderHistory(today) {
+  const view = $('#view-history');
+  if (!STATE.habits.length) {
+    view.innerHTML = `<div class="empty-state"><span class="big">&#128197;</span>History appears once you have habits and check-ins.</div>`;
+    return;
+  }
+
+  const first = L.firstTrackedDay(STATE.habits, STATE.days);
+  const thisMonday = L.mondayOf(today);
+  const rows = [];
+  let lastMonth = '';
+
+  for (let w = 0; w < 12; w++) {
+    const monday = L.addDays(thisMonday, -7 * w);
+    if (first && L.addDays(monday, 6) < first) break; // nothing tracked that far back
+    const [y, m] = monday.split('-').map(Number);
+    const monthName = new Date(y, m - 1, 1).toLocaleDateString('en', { month: 'short' });
+    const label = monthName === lastMonth ? '' : monthName;
+    lastMonth = monthName;
+
+    const cells = [];
+    for (let i = 0; i < 7; i++) {
+      const date = L.addDays(monday, i);
+      if (date > today) { cells.push('<span class="heat-cell future"></span>'); continue; }
+      const summary = L.daySummary(STATE.habits, STATE.days, date);
+      const urges = L.urgesOn(STATE.days, date).length;
+      const mood = L.moodOn(STATE.days, date);
+      const moodBar = (mood && mood.score)
+        ? `<span class="mood-bar" style="background:${MOOD_COLORS[mood.score]}"></span>`
+        : '<span class="mood-bar"></span>';
+      cells.push(`
+        <button class="heat-cell${date === today ? ' today' : ''}" onclick="openDayModal('${date}')" title="${date}">
+          <span class="heat-dom">${Number(date.slice(8))}</span>
+          <span class="dot ${summary}"></span>
+          ${urges ? `<span class="urge-marker">&#128170;${urges > 1 ? urges : ''}</span>` : ''}
+          ${moodBar}
+        </button>`);
+    }
+    rows.push(`<div class="heat-row"><span class="heat-label">${label}</span>${cells.join('')}</div>`);
+  }
+
+  view.innerHTML = `
+    <h2 class="section-title">Last ${rows.length} week${rows.length === 1 ? '' : 's'}</h2>
+    <div class="heat-dow-row"><span class="heat-label"></span>${['M','T','W','T','F','S','S'].map(d => `<span class="heat-dow">${d}</span>`).join('')}</div>
+    ${rows.join('')}
+    <div class="heat-legend">
+      <span><span class="dot full"></span> all done</span>
+      <span><span class="dot partial"></span> partial</span>
+      <span><span class="dot fail"></span> slip/fail</span>
+      <span><span class="dot none"></span> missed</span>
+      <span>&#128170; urge resisted</span>
+      <span><span class="mood-bar demo"></span> mood</span>
+    </div>
+    <p class="small-print">Tap any day to see details or fix a check-in.</p>`;
 }
 
 /* ---------- Rewards view ---------- */
@@ -404,7 +558,12 @@ function deleteHabit(id) {
   for (const date of Object.keys(STATE.days)) {
     const day = STATE.days[date];
     if (day.habits) delete day.habits[id];
-    if (day.habits && !Object.keys(day.habits).length && !day.urges && !day.mood) delete STATE.days[date];
+    if (day.urges) {
+      day.urges = day.urges.filter(u => u.habitId !== id);
+      if (!day.urges.length) delete day.urges;
+    }
+    const empty = (!day.habits || !Object.keys(day.habits).length) && !day.urges && !day.mood;
+    if (empty) delete STATE.days[date];
   }
   closeModal();
   saveRender();
@@ -441,14 +600,29 @@ function saveReward() {
 function openDayModal(date) {
   const today = L.todayStr();
   const habits = L.activeHabits(STATE.habits).filter(h => L.createdDay(h) <= date);
-  if (!habits.length) return;
 
   const [y, m, d] = date.split('-').map(Number);
   const nice = new Date(y, m - 1, d).toLocaleDateString('en', { weekday: 'long', day: 'numeric', month: 'long' });
 
+  const urges = L.urgesOn(STATE.days, date);
+  const habitName = id => { const h = STATE.habits.find(x => x.id === id); return h ? h.name : '(deleted habit)'; };
+  const urgesHTML = urges.length ? `
+    <h2 class="section-title">Urges resisted</h2>
+    ${urges.map((u, i) => `
+      <div class="urge-item">
+        <div class="urge-body">
+          <b>&#128170; ${esc(habitName(u.habitId))}</b> <span class="muted">${(u.ts || '').slice(11, 16)}</span>
+          ${u.note ? `<div class="urge-note">${esc(u.note)}</div>` : ''}
+        </div>
+        <button class="icon-btn" onclick="deleteUrge('${date}',${i})" title="Delete">&#10005;</button>
+      </div>`).join('')}` : '';
+
   openModal(`
     <h3>${date === today ? 'Today' : nice}</h3>
     ${habits.map(h => dayEditRowHTML(h, date)).join('')}
+    ${urgesHTML}
+    <h2 class="section-title">Mood &amp; energy</h2>
+    <div id="modalMood-${date}">${moodCardHTML(date, 'm-')}</div>
     <div class="modal-actions">
       <button class="btn primary" onclick="closeModal()">Done</button>
     </div>
