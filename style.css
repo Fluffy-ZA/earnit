@@ -126,6 +126,7 @@ h2.section-title {
 .dot.partial { background: var(--accent); }
 .dot.fail { background: var(--bad); }
 .dot.none { background: #3a4150; }
+.dot.break { background: var(--info); opacity: 0.6; }
 
 /* ---------- habit cards ---------- */
 .habit-card {
@@ -201,6 +202,14 @@ h2.section-title {
   white-space: nowrap;
 }
 .chip.goal { background: var(--surface-2); color: var(--muted); border: 1px solid var(--border); }
+.chip.break { background: #10233a; color: #7dd3fc; border: 1px solid #1e3a52; }
+
+/* badge ladder on habit cards */
+.badge-emoji { font-size: 1.15rem; line-height: 1; }
+.streak-count { font-weight: 800; }
+.badge-next { font-size: 0.75rem; margin-top: 6px; }
+.habit-card.frozen { opacity: 0.82; }
+.habit-card.frozen .bar-fill { background: var(--info); }
 
 /* ---------- buttons ---------- */
 .btn {
@@ -265,6 +274,16 @@ h2.section-title {
 }
 .reward-text { flex: 1; font-weight: 600; overflow-wrap: anywhere; }
 .reward-card.locked .reward-text { filter: blur(5px); user-select: none; }
+.reward-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
 .reward-lock { font-size: 1.1rem; }
 .reward-card.redeemed { opacity: 0.55; }
 .reward-card.redeemed .reward-text { text-decoration: line-through; }
@@ -373,6 +392,46 @@ h2.section-title {
   padding: 11px 12px;
 }
 .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent-dim); }
+.field select.select {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 11px 12px;
+  color-scheme: dark;
+}
+.field select.select:focus { outline: none; border-color: var(--accent-dim); }
+
+/* per-habit holiday/break list in the habit form */
+.break-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.break-item span { flex: 1; }
+.break-add { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.break-add input[type="date"] {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  color-scheme: dark;
+}
+.break-tag { font-size: 0.75rem; color: var(--info); margin-top: 8px; }
+.day-edit-habit.frozen .seg, .day-edit-habit.frozen .amount-edit, .day-edit-habit.frozen .stepper { opacity: 0.55; }
 
 .seg {
   display: flex;

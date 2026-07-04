@@ -53,6 +53,51 @@ const EarnLogic = (() => {
   function isWeekly(h) { return h.type === 'do' && h.per === 'week'; }
   function isTimed(h) { return h.type === 'do' && h.measure === 'minutes'; }
 
+  // A habit is "on break" (frozen) on any date inside one of its break ranges.
+  function onBreak(h, date) {
+    const bs = h.breaks;
+    if (!bs) return false;
+    for (const b of bs) if (b && b.from && b.to && date >= b.from && date <= b.to) return true;
+    return false;
+  }
+
+  /* Escalating badge ladder — replaces the old user-set milestone. `days` is the
+     streak length (in days) that earns the badge. Weekly streaks are converted to
+     days (×7) before lookup so every habit rides the same calendar ladder. */
+  const BADGES = [
+    { emoji: '🌱', days: 7,   label: '1 week' },
+    { emoji: '🔥', days: 14,  label: '2 weeks' },
+    { emoji: '⚡', days: 21,  label: '3 weeks' },
+    { emoji: '🏅', days: 28,  label: '1 month' },
+    { emoji: '🥈', days: 60,  label: '2 months' },
+    { emoji: '🥇', days: 90,  label: '3 months' },
+    { emoji: '💎', days: 180, label: '6 months' },
+    { emoji: '👑', days: 365, label: '1 year' },
+  ];
+
+  // Current + next badge for a streak length in days (⭐ every year past the first).
+  function badgeInfo(streakDays) {
+    const ladder = BADGES.slice();
+    let y = 2;
+    while (ladder[ladder.length - 1].days <= streakDays) {
+      ladder.push({ emoji: '⭐', days: y * 365, label: `${y} years` });
+      y++;
+    }
+    let current = null, next = ladder[0];
+    for (const b of ladder) {
+      if (streakDays >= b.days) current = b;
+      else { next = b; break; }
+    }
+    const from = current ? current.days : 0;
+    const span = next.days - from;
+    return { current, next, ratio: span > 0 ? Math.min(1, (streakDays - from) / span) : 1, streakDays };
+  }
+
+  // The badge earned at a specific day-threshold (used for reward requirements).
+  function badgeByDays(days) {
+    return BADGES.find(b => b.days === days) || badgeInfo(days).current || BADGES[0];
+  }
+
   // 'avoid': every day since creation (or since the last 'failed' day) is clean
   function avoidStreak(habit, days, today) {
     const created = createdDay(habit);
@@ -60,8 +105,10 @@ const EarnLogic = (() => {
     let count = 0;
     let d = today;
     while (d >= created) {
-      if (status(days, d, habit.id) === 'failed') break;
-      count++;
+      if (!onBreak(habit, d)) {           // break days are frozen: neither break nor count
+        if (status(days, d, habit.id) === 'failed') break;
+        count++;
+      }
       d = addDays(d, -1);
     }
     return count;
@@ -93,11 +140,15 @@ const EarnLogic = (() => {
       const thisMon = mondayOf(today);
       let mon = mondayOf(created);
       while (mon <= thisMon) {
-        let amt = 0;
+        let amt = 0, active = 0, broken = 0;
         for (let i = 0; i < 7; i++) {
           const d = addDays(mon, i);
-          if (d >= created && d <= today) amt += amountOn(days, d, h.id);
+          if (d < created || d > today) continue;
+          active++;
+          if (onBreak(h, d)) broken++;
+          amt += amountOn(days, d, h.id);
         }
+        if (active > 0 && broken === active) { mon = addDays(mon, 7); continue; } // whole week frozen
         let st;
         if (amt >= goal) { st = 'done'; bank += amt - goal; }
         else if (mon === thisMon) st = 'pending';
@@ -113,6 +164,7 @@ const EarnLogic = (() => {
     } else {
       let d = created;
       while (d <= today) {
+        if (onBreak(h, d)) { d = addDays(d, 1); continue; } // frozen day — no credit, no miss
         const raw = status(days, d, h.id);
         const amt = amountOn(days, d, h.id);
         let st;
@@ -152,38 +204,44 @@ const EarnLogic = (() => {
     return map;
   }
 
+  // Streak length in calendar days (weekly streaks ×7) — the badge ladder's unit.
+  function habitStreakDays(h, days, today) {
+    return ledger(h, days, today).streak * (isWeekly(h) ? 7 : 1);
+  }
+
   // Current streak (days for daily/quit habits, weeks for weekly habits)
   function streak(habit, days, today) {
     if (habit.type === 'avoid') return avoidStreak(habit, days, today);
     return ledger(habit, days, today).streak;
   }
 
-  // All active habits at/over their milestone → rewards unlocked.
-  function unlocked(habits, days, today) {
-    const act = activeHabits(habits);
-    return act.length > 0 && act.every(h => streak(h, days, today) >= h.milestone);
+  // A reward's badge requirement in days (legacy rewards default to ⚡ 21 days).
+  function rewardBadgeDays(reward) {
+    return (typeof reward.badge === 'number' && reward.badge > 0) ? reward.badge : 21;
   }
 
-  // Per-habit progress + overall days-to-unlock (weeks converted to days)
-  function progress(habits, days, today) {
+  /* Reward unlocking, badge-based: each reward carries a badge requirement (in days)
+     and unlocks once the *weakest* active habit's streak reaches that badge.
+     Returns per-reward status plus the weakest habit and nearest locked reward. */
+  function rewardsStatus(habits, rewards, days, today) {
     const act = activeHabits(habits);
-    const items = act.map(h => {
-      const s = streak(h, days, today);
-      const remaining = Math.max(0, h.milestone - s);
+    const sd = act.map(h => habitStreakDays(h, days, today));
+    const minSD = sd.length ? Math.min(...sd) : 0;
+    let weakest = null, weakestSD = Infinity;
+    act.forEach((h, i) => { if (sd[i] < weakestSD) { weakestSD = sd[i]; weakest = h; } });
+
+    const items = (rewards || []).filter(r => !r.redeemedAt).map(r => {
+      const need = rewardBadgeDays(r);
       return {
-        habit: h,
-        streak: s,
-        unit: isWeekly(h) ? 'week' : 'day',
-        ratio: h.milestone > 0 ? Math.min(1, s / h.milestone) : 1,
-        remaining,
-        remainingDays: remaining * (isWeekly(h) ? 7 : 1),
+        reward: r, need, badge: badgeByDays(need),
+        unlocked: act.length > 0 && minSD >= need,
+        remaining: Math.max(0, need - minSD),
       };
     });
-    const daysToUnlock = items.length ? Math.max(...items.map(i => i.remainingDays)) : null;
-    const weakest = items.length
-      ? items.reduce((a, b) => (b.remainingDays > a.remainingDays ? b : a))
-      : null;
-    return { items, daysToUnlock, weakest, unlocked: unlocked(habits, days, today) };
+    const ready = items.filter(i => i.unlocked);
+    const locked = items.filter(i => !i.unlocked);
+    const nearest = locked.length ? locked.reduce((a, b) => (b.remaining < a.remaining ? b : a)) : null;
+    return { items, ready, locked, nearest, anyReady: ready.length > 0, minStreakDays: minSD, weakest };
   }
 
   /* Summary of one calendar day for the strips/heatmap:
@@ -191,8 +249,10 @@ const EarnLogic = (() => {
      its goal (or was covered by credit), 'partial' if some, 'none' otherwise.
      Weekly habits only count positively (a golf-free Tuesday isn't a miss). */
   function daySummary(habits, days, date, ledgers) {
-    const act = activeHabits(habits).filter(h => createdDay(h) <= date);
-    if (!act.length) return 'empty';
+    const existing = activeHabits(habits).filter(h => createdDay(h) <= date);
+    if (!existing.length) return 'empty';
+    const act = existing.filter(h => !onBreak(h, date));
+    if (!act.length) return 'break'; // every habit that day was frozen
     let done = 0, expected = 0, failed = 0;
     for (const h of act) {
       if (h.type === 'avoid') {
@@ -267,6 +327,7 @@ const EarnLogic = (() => {
         habit: h, done, expected, amount,
         failedDates, missedDates, coveredDates,
         streak: led.streak, bank: led.bank,
+        streakDays: led.streak * (isWeekly(h) ? 7 : 1),
         weekAmount: led.current.amount, goal: goalOf(h),
       };
     });
@@ -315,6 +376,7 @@ const EarnLogic = (() => {
   }
 
   return { todayStr, addDays, status, amountOn, createdDay, activeHabits, goalOf, isWeekly, isTimed,
-           ledger, allLedgers, streak, unlocked, progress, daySummary, mondayOf, urgesOn, moodOn,
+           onBreak, BADGES, badgeInfo, badgeByDays, habitStreakDays, rewardBadgeDays, rewardsStatus,
+           ledger, allLedgers, streak, daySummary, mondayOf, urgesOn, moodOn,
            firstTrackedDay, weeklyStats };
 })();

@@ -1,7 +1,7 @@
 /* sw.js — cache-first service worker for the app shell.
    Bump CACHE_VERSION on every release to push updates to installed clients. */
 
-const CACHE_VERSION = 'earnit-v1.3.0';
+const CACHE_VERSION = 'earnit-v1.4.0';
 const ASSETS = [
   '.',
   'index.html',

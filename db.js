@@ -3,20 +3,26 @@
 
 const EarnDB = (() => {
   const KEY = 'earnit_state';
-  const VERSION = 2; // v2: habits gained measure ('check'|'minutes'), per ('day'|'week'), goal
+  const VERSION = 3; // v3: habits gained breaks[]; rewards gained badge (day-threshold); milestone retired
 
   function defaults() {
     return { version: VERSION, habits: [], days: {}, rewards: [], reviews: [], settings: {} };
   }
 
-  // v1 habits were all check-off daily habits with an implicit goal of 1
+  // v1 habits were all check-off daily habits; v2 added measure/per/goal; v3 added breaks.
   function migrateHabit(h) {
     return {
       ...h,
       measure: h.measure === 'minutes' ? 'minutes' : 'check',
       per: h.per === 'week' ? 'week' : 'day',
       goal: (typeof h.goal === 'number' && h.goal > 0) ? h.goal : 1,
+      breaks: Array.isArray(h.breaks) ? h.breaks : [],
     };
+  }
+
+  // v3 rewards carry a badge requirement (in days); older rewards default to ⚡ 21 days.
+  function migrateReward(r) {
+    return { ...r, badge: (typeof r.badge === 'number' && r.badge > 0) ? r.badge : 21 };
   }
 
   // Fill any missing top-level fields; future schema bumps hook in here.
@@ -27,7 +33,7 @@ const EarnDB = (() => {
       version: VERSION,
       habits: Array.isArray(s.habits) ? s.habits.map(migrateHabit) : d.habits,
       days: (s.days && typeof s.days === 'object') ? s.days : d.days,
-      rewards: Array.isArray(s.rewards) ? s.rewards : d.rewards,
+      rewards: Array.isArray(s.rewards) ? s.rewards.map(migrateReward) : d.rewards,
       reviews: Array.isArray(s.reviews) ? s.reviews : d.reviews,
       settings: (s.settings && typeof s.settings === 'object') ? s.settings : d.settings,
     };

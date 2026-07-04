@@ -69,12 +69,17 @@ function renderHeader(today) {
   const act = L.activeHabits(STATE.habits);
   if (!act.length) { el.textContent = ''; el.className = 'pill'; el.style.display = 'none'; return; }
   el.style.display = '';
-  if (L.unlocked(STATE.habits, STATE.days, today)) {
-    el.textContent = 'UNLOCKED';
+  const rs = L.rewardsStatus(STATE.habits, STATE.rewards, STATE.days, today);
+  if (rs.anyReady) {
+    el.textContent = '🎁 READY';
     el.className = 'pill unlocked';
+  } else if (rs.nearest) {
+    el.textContent = `${rs.nearest.remaining}d to ${rs.nearest.badge.emoji}`;
+    el.className = 'pill';
   } else {
-    const p = L.progress(STATE.habits, STATE.days, today);
-    el.textContent = `${p.daysToUnlock}d to go`;
+    // no pending rewards — show the weakest habit's next badge
+    const b = L.badgeInfo(rs.minStreakDays);
+    el.textContent = `${b.next.emoji} in ${Math.max(0, b.next.days - b.streakDays)}d`;
     el.className = 'pill';
   }
 }
@@ -194,21 +199,33 @@ function deleteUrge(date, index) {
 }
 
 function bannerHTML(today) {
-  const p = L.progress(STATE.habits, STATE.days, today);
-  if (p.unlocked) {
+  const rs = L.rewardsStatus(STATE.habits, STATE.rewards, STATE.days, today);
+  if (rs.anyReady) {
+    const r = rs.ready[0];
     return `
       <div class="banner unlocked">
-        <div class="banner-title">&#127873; Rewards unlocked</div>
-        <div class="banner-sub">Every streak is at its milestone. You earned it — go claim one.</div>
+        <div class="banner-title">&#127873; Reward unlocked</div>
+        <div class="banner-sub">Your weakest streak reached ${r.badge.emoji} ${r.badge.label}. You earned it — go claim it.</div>
       </div>`;
   }
-  const minRatio = p.items.length ? Math.min(...p.items.map(i => i.ratio)) : 0;
-  const weakName = p.weakest ? esc(p.weakest.habit.name) : '';
+  const weakName = rs.weakest ? esc(rs.weakest.name) : '';
+  if (!rs.items.length) {
+    // no rewards defined yet — show badge progress instead
+    const b = L.badgeInfo(rs.minStreakDays);
+    return `
+      <div class="banner">
+        <div class="banner-title">${b.current ? b.current.emoji + ' ' + b.current.label + ' badge' : '🌱 Just getting started'}</div>
+        <div class="banner-sub">Next badge ${b.next.emoji} ${b.next.label}${weakName ? ` &middot; behind: <b>${weakName}</b>` : ''}. Add a reward to work toward.</div>
+        <div class="bar"><div class="bar-fill" style="width:${Math.round(b.ratio * 100)}%"></div></div>
+      </div>`;
+  }
+  const n = rs.nearest;
+  const ratio = n.need > 0 ? Math.min(1, rs.minStreakDays / n.need) : 1;
   return `
     <div class="banner">
-      <div class="banner-title">&#128274; Rewards locked</div>
-      <div class="banner-sub">${p.daysToUnlock} day${p.daysToUnlock === 1 ? '' : 's'} to unlock &middot; furthest behind: <b>${weakName}</b></div>
-      <div class="bar"><div class="bar-fill" style="width:${Math.round(minRatio * 100)}%"></div></div>
+      <div class="banner-title">&#128274; Next reward at ${n.badge.emoji} ${n.badge.label}</div>
+      <div class="banner-sub">${n.remaining} day${n.remaining === 1 ? '' : 's'} to unlock &ldquo;${esc(n.reward.text)}&rdquo;${weakName ? ` &middot; behind: <b>${weakName}</b>` : ''}</div>
+      <div class="bar"><div class="bar-fill" style="width:${Math.round(ratio * 100)}%"></div></div>
     </div>`;
 }
 
@@ -231,11 +248,14 @@ function weekStripHTML(today) {
 
 function habitCardHTML(h, today) {
   const led = LEDGERS[h.id] || { bank: 0, streak: 0, current: { amount: 0, goal: 1 } };
-  const s = h.type === 'avoid' ? L.streak(h, STATE.days, today) : led.streak;
-  const met = s >= h.milestone;
-  const ratio = h.milestone > 0 ? Math.min(1, s / h.milestone) : 1;
-  const st = L.status(STATE.days, today, h.id);
+  const s = led.streak;
   const unitWord = L.isWeekly(h) ? 'week' : 'day';
+  const streakDays = s * (L.isWeekly(h) ? 7 : 1);
+  const badge = L.badgeInfo(streakDays);
+  const remDays = Math.max(0, badge.next.days - streakDays);
+  const toNext = L.isWeekly(h) ? `${Math.ceil(remDays / 7)} wk` : `${remDays}d`;
+  const st = L.status(STATE.days, today, h.id);
+  const frozen = L.onBreak(h, today);
 
   const urgesToday = L.urgesOn(STATE.days, today).filter(u => u.habitId === h.id).length;
   const urgeBtn = `<button class="btn small urge-btn" onclick="openUrgeModal('${h.id}')" title="Log an urge you resisted">&#128170;${urgesToday ? ` &times;${urgesToday}` : ''}</button>`;
@@ -280,23 +300,27 @@ function habitCardHTML(h, today) {
 
   const goalChip = (h.type === 'do' && (L.isTimed(h) || L.isWeekly(h) || L.goalOf(h) > 1))
     ? `<span class="chip goal">${goalLabel(h)}</span>` : '';
+  const breakChip = frozen ? `<span class="chip break">&#10052; ON BREAK</span>` : '';
   const bankChip = (h.type === 'do' && led.bank > 0)
     ? `<span class="bank-chip" title="Banked extra — automatically covers a future short ${unitWord}">&#128179; ${fmtAmt(h, led.bank)} credit</span>` : '';
 
   return `
-    <div class="habit-card">
+    <div class="habit-card${frozen ? ' frozen' : ''}">
       <div class="habit-top">
         <span class="habit-name">${esc(h.name)}</span>
         ${goalChip}
+        ${breakChip}
         <span class="chip ${h.type}">${h.type === 'do' ? 'BUILD' : 'QUIT'}</span>
         <button class="icon-btn" onclick="openHabitModal('${h.id}')" title="Edit habit">&#9998;</button>
       </div>
       <div class="habit-streak">
-        <span class="${met ? 'met' : ''}">&#128293; ${s}</span>
-        <span class="muted">/ ${h.milestone} ${unitWord} milestone${met ? ' — met!' : ''}</span>
+        <span class="badge-emoji" title="${badge.current ? 'Earned: ' + badge.current.label : 'No badge yet'}">${badge.current ? badge.current.emoji : '·'}</span>
+        <span class="streak-count">&#128293; ${s}</span>
+        <span class="muted">${unitWord}${s === 1 ? '' : 's'}${badge.current ? ' &middot; ' + badge.current.label : ''}</span>
         ${bankChip}
       </div>
-      <div class="bar"><div class="bar-fill ${met ? 'met' : ''}" style="width:${Math.round(ratio * 100)}%"></div></div>
+      <div class="bar"><div class="bar-fill" style="width:${Math.round(badge.ratio * 100)}%"></div></div>
+      <div class="badge-next muted">${badge.next.emoji} ${badge.next.label} in ${toNext}</div>
       ${progressLine}
       <div class="habit-actions">${actions}</div>
     </div>`;
@@ -379,6 +403,7 @@ function renderHistory(today) {
       <span><span class="dot partial"></span> partial</span>
       <span><span class="dot fail"></span> slip/fail</span>
       <span><span class="dot none"></span> missed</span>
+      <span><span class="dot break"></span> on break</span>
       <span>&#128170; urge resisted</span>
       <span><span class="mood-bar demo"></span> mood</span>
     </div>
@@ -389,7 +414,7 @@ function renderHistory(today) {
 
 const REVIEW_SYSTEM = `You are the weekly-review coach inside "Earn It", a private habit tracker and recovery companion. The user is working to quit compulsive habits and build daily ones. You receive one week of their logged data.
 
-Some build habits are weekly (e.g. gym 3x/week) or measured in minutes rather than check-offs. Doing extra banks "credit" that automatically covers a later short day or week — a day marked "covered by credit" is fine, not a failure.
+Some build habits are weekly (e.g. gym 3x/week) or measured in minutes rather than check-offs. Doing extra banks "credit" that automatically covers a later short day or week — a day marked "covered by credit" is fine, not a failure. Habits earn escalating badges (1 week, 2 weeks, 1 month, and so on up to 1 year) as the streak grows — celebrate a newly reached badge. A habit can be on a holiday/break: those days are frozen and deliberately don't count for or against the streak, so never treat them as misses.
 
 Write a short weekly review (under 300 words), plain text, short paragraphs, simple hyphen bullets where useful:
 1. Open with one genuine, specific encouragement grounded in the data.
@@ -403,23 +428,28 @@ function buildReviewData() {
   const s = L.weeklyStats(STATE.habits, STATE.days, L.todayStr());
   const lines = [`My logged data for ${s.startDate} to ${s.endDate}:`, ''];
 
-  lines.push('Habits and current streaks:');
+  lines.push('Habits, streaks and badges:');
   for (const h of s.habitStats) {
     const hb = h.habit;
+    const bd = L.badgeInfo(h.streakDays);
+    const badgeTxt = bd.current ? `${bd.current.label} badge earned` : 'no badge yet';
+    const nextTxt = `next badge ${bd.next.label} at ${bd.next.days}d`;
+    const brk = (hb.breaks || []).filter(b => b.to >= s.startDate && b.from <= s.endDate);
     if (hb.type === 'do') {
       let l;
       if (L.isWeekly(hb)) {
-        l = `- ${hb.name} (build, ${goalLabel(hb)}, milestone ${hb.milestone} weeks): streak ${h.streak} weeks, this week ${fmtAmt(hb, h.weekAmount)} of ${fmtAmt(hb, h.goal)}`;
+        l = `- ${hb.name} (build, ${goalLabel(hb)}): streak ${h.streak} week${h.streak === 1 ? '' : 's'} (${badgeTxt}, ${nextTxt}), this week ${fmtAmt(hb, h.weekAmount)} of ${fmtAmt(hb, h.goal)}`;
       } else {
-        l = `- ${hb.name} (build, ${goalLabel(hb)}, milestone ${hb.milestone} days): streak ${h.streak}d, hit goal ${h.done}/${h.expected} days this week`;
+        l = `- ${hb.name} (build, ${goalLabel(hb)}): streak ${h.streak}d (${badgeTxt}, ${nextTxt}), hit goal ${h.done}/${h.expected} days this week`;
         if (L.isTimed(hb)) l += `, ${fmtMin(h.amount)} logged in total`;
         if (h.coveredDates.length) l += `, short but covered by credit on ${h.coveredDates.join(', ')}`;
         if (h.missedDates.length) l += `, missed on ${h.missedDates.join(', ')}`;
       }
       if (h.bank > 0) l += `, credit bank ${fmtAmt(hb, h.bank)}`;
+      if (brk.length) l += `, on holiday/break ${brk.map(b => b.from + '..' + b.to).join(', ')}`;
       lines.push(l);
     } else {
-      lines.push(`- ${hb.name} (quit, goal ${hb.milestone} days clean): streak ${h.streak}d, ${h.failedDates.length ? 'slipped on ' + h.failedDates.join(', ') : 'clean all week'}`);
+      lines.push(`- ${hb.name} (quit): streak ${h.streak}d clean (${badgeTxt}, ${nextTxt}), ${h.failedDates.length ? 'slipped on ' + h.failedDates.join(', ') : 'clean all week'}`);
     }
   }
 
@@ -539,7 +569,8 @@ async function generateReview() {
 
 function renderRewards(today) {
   const view = $('#view-rewards');
-  const isUnlocked = L.unlocked(STATE.habits, STATE.days, today);
+  const rs = L.rewardsStatus(STATE.habits, STATE.rewards, STATE.days, today);
+  const byId = {}; rs.items.forEach(i => byId[i.reward.id] = i);
   const pending = STATE.rewards.filter(r => !r.redeemedAt);
   const redeemed = STATE.rewards.filter(r => r.redeemedAt);
 
@@ -549,15 +580,19 @@ function renderRewards(today) {
   if (!pending.length) {
     html += `<div class="empty-state"><span class="big">&#127873;</span>No rewards defined.<br>Write down what you're working toward.</div>`;
   } else {
-    html += pending.map(r => `
-      <div class="reward-card ${isUnlocked ? '' : 'locked'}">
-        <span class="reward-lock">${isUnlocked ? '&#127873;' : '&#128274;'}</span>
+    html += pending.map(r => {
+      const it = byId[r.id] || { unlocked: false, badge: L.badgeByDays(L.rewardBadgeDays(r)), remaining: 0 };
+      return `
+      <div class="reward-card ${it.unlocked ? '' : 'locked'}">
+        <span class="reward-lock">${it.unlocked ? '&#127873;' : it.badge.emoji}</span>
         <span class="reward-text">${esc(r.text)}</span>
-        ${isUnlocked
+        <span class="reward-badge" title="Unlocks when your weakest habit reaches ${it.badge.label}">${it.badge.emoji} ${it.badge.label}${it.unlocked ? '' : ` &middot; ${it.remaining}d`}</span>
+        ${it.unlocked
           ? `<button class="btn small primary" onclick="redeemReward('${r.id}')">Redeem</button>`
           : ''}
         <button class="icon-btn" onclick="deleteReward('${r.id}')" title="Delete reward">&#10005;</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
   html += `<button class="add-btn" onclick="openRewardModal()">+ Add reward</button>`;
 
@@ -834,14 +869,11 @@ function openHabitModal(id) {
       </div>
     </div>
     <div class="field">
-      <label for="habitMilestone" id="habitMilestoneLabel">${milestoneFieldLabel()}</label>
-      <input type="number" id="habitMilestone" min="1" max="365" inputmode="numeric" value="${h ? h.milestone : 21}">
-    </div>
-    <div class="field">
       <label for="habitStart">Started on</label>
       <input type="date" id="habitStart" max="${L.todayStr()}" value="${h ? L.createdDay(h) : L.todayStr()}">
       <div class="seg-hint">Backdate this if you've already been at it. Quit habits count clean from this date automatically; for build habits, tick off the past days in the week strip or History.</div>
     </div>
+    ${h && h.type === 'do' ? habitBreaksHTML(h) : ''}
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn primary" onclick="saveHabit(${h ? `'${h.id}'` : 'null'})">${h ? 'Save' : 'Add habit'}</button>
@@ -851,9 +883,58 @@ function openHabitModal(id) {
       <button class="btn" onclick="archiveHabit('${h.id}')">Archive</button>
       <button class="btn danger-ghost" onclick="deleteHabit('${h.id}')">Delete</button>
     </div>
-    <p class="small-print">Archive removes it from the unlock condition but keeps its history. Delete erases it and its history.</p>` : ''}
+    <p class="small-print">Archive removes it from the reward unlock but keeps its history. Delete erases it and its history.${h.type === 'do' ? ' Badges climb automatically — no milestone to set.' : ''}</p>` : ''}
+    ${!h ? `<p class="small-print">Badges are earned automatically as your streak grows (🌱 1 week → 👑 1 year). Save first, then re-open to add holiday breaks.</p>` : ''}
   `);
   setTimeout(() => $('#habitName').focus(), 50);
+}
+
+/* Per-habit holiday/break ranges — frozen days that neither break nor grow the streak. */
+function habitBreaksHTML(h) {
+  const bs = h.breaks || [];
+  const list = bs.length
+    ? bs.map((b, i) => `
+      <div class="break-item">
+        <span>&#10052; ${b.from} &rarr; ${b.to}</span>
+        <button class="icon-btn" onclick="removeHabitBreak('${h.id}',${i})" title="Remove">&#10005;</button>
+      </div>`).join('')
+    : `<p class="small-print">No breaks yet. Add a holiday range (e.g. December) to freeze this streak — those days won't break it or add to it.</p>`;
+  const today = L.todayStr();
+  return `
+    <div class="field" id="habitBreaks">
+      <label>Holidays / breaks &#10052;</label>
+      ${list}
+      <div class="break-add">
+        <input type="date" id="breakFrom" value="${today}">
+        <span class="muted">&rarr;</span>
+        <input type="date" id="breakTo" value="${today}">
+        <button class="btn small" onclick="addHabitBreak('${h.id}')">Add</button>
+      </div>
+    </div>`;
+}
+
+function addHabitBreak(id) {
+  const h = STATE.habits.find(x => x.id === id);
+  if (!h) return;
+  const from = ($('#breakFrom').value || '').trim();
+  const to = ($('#breakTo').value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) { alert('Pick both dates.'); return; }
+  const lo = from <= to ? from : to, hi = from <= to ? to : from;
+  if (!h.breaks) h.breaks = [];
+  h.breaks.push({ from: lo, to: hi });
+  h.breaks.sort((a, b) => (a.from < b.from ? -1 : 1));
+  saveRender();
+  const c = $('#habitBreaks');
+  if (c) c.outerHTML = habitBreaksHTML(h);
+}
+
+function removeHabitBreak(id, index) {
+  const h = STATE.habits.find(x => x.id === id);
+  if (!h || !h.breaks) return;
+  h.breaks.splice(index, 1);
+  saveRender();
+  const c = $('#habitBreaks');
+  if (c) c.outerHTML = habitBreaksHTML(h);
 }
 
 function habitTypeHint() {
@@ -867,15 +948,9 @@ function goalFieldLabel() {
     + ' per ' + (habitFormPer === 'week' ? 'week' : 'day');
 }
 
-function milestoneFieldLabel() {
-  return `Milestone (${habitFormType === 'do' && habitFormPer === 'week' ? 'weeks' : 'days'})`;
-}
-
 function updateHabitFormLabels() {
   const gl = $('#habitGoalLabel');
   if (gl) gl.textContent = goalFieldLabel();
-  const ml = $('#habitMilestoneLabel');
-  if (ml) ml.textContent = milestoneFieldLabel();
 }
 
 function setHabitFormType(type) {
@@ -907,7 +982,6 @@ function setHabitFormPer(p) {
 
 function saveHabit(id) {
   const name = $('#habitName').value.trim();
-  const milestone = Math.max(1, Math.min(365, parseInt($('#habitMilestone').value, 10) || 21));
   if (!name) { alert('Give the habit a name.'); return; }
 
   const measure = habitFormType === 'do' ? habitFormMeasure : 'check';
@@ -924,7 +998,7 @@ function saveHabit(id) {
   if (id) {
     const h = STATE.habits.find(x => x.id === id);
     if (h) {
-      h.name = name; h.type = habitFormType; h.milestone = milestone; h.createdAt = createdAt;
+      h.name = name; h.type = habitFormType; h.createdAt = createdAt;
       h.measure = measure; h.per = per; h.goal = goal;
     }
   } else {
@@ -935,9 +1009,9 @@ function saveHabit(id) {
       measure,
       per,
       goal,
-      milestone,
       createdAt,
       archivedAt: null,
+      breaks: [],
     });
   }
   closeModal();
@@ -976,17 +1050,22 @@ function deleteHabit(id) {
 /* ---------- reward form ---------- */
 
 function openRewardModal() {
+  const opts = L.BADGES.map(b => `<option value="${b.days}"${b.days === 28 ? ' selected' : ''}>${b.emoji} ${b.label}</option>`).join('');
   openModal(`
     <h3>New reward</h3>
     <div class="field">
       <label for="rewardText">Reward</label>
       <input type="text" id="rewardText" placeholder='e.g. "Send that message", "Buy that thing"' maxlength="120">
     </div>
+    <div class="field">
+      <label for="rewardBadge">Unlock at badge</label>
+      <select id="rewardBadge" class="select">${opts}</select>
+      <div class="seg-hint">Unlocks once your weakest active habit reaches this badge. Bigger reward &rarr; pick a higher badge.</div>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn primary" onclick="saveReward()">Add reward</button>
     </div>
-    <p class="small-print">Unlocks only when every active habit streak reaches its milestone.</p>
   `);
   setTimeout(() => $('#rewardText').focus(), 50);
 }
@@ -994,7 +1073,8 @@ function openRewardModal() {
 function saveReward() {
   const text = $('#rewardText').value.trim();
   if (!text) { alert('Describe the reward.'); return; }
-  STATE.rewards.push({ id: uid(), text, createdAt: new Date().toISOString(), redeemedAt: null });
+  const badge = parseInt($('#rewardBadge').value, 10) || 28;
+  STATE.rewards.push({ id: uid(), text, badge, createdAt: new Date().toISOString(), redeemedAt: null });
   closeModal();
   saveRender();
 }
@@ -1064,10 +1144,13 @@ function dayEditRowHTML(h, date) {
       <button class="${st === 'failed' ? 'on bad' : ''}" onclick="dayEditSet('${h.id}','${date}','failed')">Failed</button>
     </div>`;
   }
+  const frozen = L.onBreak(h, date)
+    ? `<div class="break-tag">&#10052; On break this day — frozen, doesn't count for or against the streak.</div>` : '';
   return `
-    <div class="day-edit-habit" id="dayrow-${h.id}">
+    <div class="day-edit-habit${frozen ? ' frozen' : ''}" id="dayrow-${h.id}">
       <div class="name">${esc(h.name)} <span class="chip ${h.type}">${h.type === 'do' ? 'BUILD' : 'QUIT'}</span></div>
       ${control}
+      ${frozen}
     </div>`;
 }
 
