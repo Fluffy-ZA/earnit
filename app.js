@@ -16,6 +16,9 @@ function uid() {
 function save() { EarnDB.save(STATE); }
 function saveRender() { save(); render(); }
 
+// iOS (incl. installed home-screen PWAs) never supports periodic background sync.
+function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent); }
+
 // Credit ledgers for every habit, recomputed once per render
 let LEDGERS = {};
 
@@ -634,11 +637,17 @@ function renderSettings() {
     <h2 class="section-title">Reminders</h2>
     <div class="settings-card">
       <h3>Daily check-in reminder</h3>
-      <p>Best effort: on Android Chrome (installed app) the browser wakes up roughly once or twice a day to nudge you — the exact time is up to the browser. For a reminder at an exact time, a normal phone alarm is still the most reliable.</p>
-      <div class="row">
-        <button class="btn" onclick="enableReminders()">${rem ? 'Re-enable reminders' : '&#128276; Enable reminders'}</button>
-      </div>
-      <p class="small-print">${rem === 'periodic' ? 'Background reminders active ✓' : rem === 'granted' ? 'Notifications allowed, but this browser cannot schedule background reminders — use a phone alarm.' : ''}</p>
+      ${isIOS() ? `
+        <p>iOS doesn't let any web app — installed or not — schedule its own background reminders. That's an Apple platform restriction, not a bug here; no setting in Earn It can change it. Real push notifications would need Earn It to have a server sending them, which it deliberately doesn't (everything stays local on your device).</p>
+        <p>The free workaround that actually works: add a <b>Personal Automation</b> in the iOS Shortcuts app — "At a scheduled time" &rarr; "Show notification" (or "Open App" &rarr; Earn It). It runs entirely on your phone, no code or server involved.</p>
+        <p class="small-print">Settings app &middot; Shortcuts &middot; Automation &middot; + &middot; Time of Day.</p>
+      ` : `
+        <p>Best effort: on Android Chrome (installed app) the browser wakes up roughly once or twice a day to nudge you — the exact time is up to the browser. For a reminder at an exact time, a normal phone alarm is still the most reliable.</p>
+        <div class="row">
+          <button class="btn" onclick="enableReminders()">${rem ? 'Re-enable reminders' : '&#128276; Enable reminders'}</button>
+        </div>
+        <p class="small-print">${rem === 'periodic' ? 'Background reminders active ✓' : rem === 'granted' ? 'Notifications allowed, but this browser/device didn’t grant background scheduling yet — use a phone alarm meanwhile.' : ''}</p>
+      `}
     </div>
 
     <h2 class="section-title">Backup</h2>
